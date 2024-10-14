@@ -2,8 +2,60 @@ import subprocess
 import json
 import csv
 from datetime import datetime
+from PyQt5 import QtWidgets, QtCore
+import sys
 
-def get_sms_list():
+class SMSApp(QtWidgets.QWidget):
+    def __init__(self):
+        super().__init__()
+        self.initUI()
+
+    def initUI(self):
+        self.setWindowTitle('메시지 추출 프로그램')
+
+        self.layout = QtWidgets.QVBoxLayout()
+
+        self.max_count_label = QtWidgets.QLabel('최대 불러오는 개수 (최신순):')
+        self.layout.addWidget(self.max_count_label)
+
+        self.max_count_input = QtWidgets.QSpinBox()
+        self.max_count_input.setMaximum(10000)
+        self.max_count_input.setValue(1000)
+        self.layout.addWidget(self.max_count_input)
+
+        self.fetch_button = QtWidgets.QPushButton('메시지 불러오기')
+        self.fetch_button.clicked.connect(self.fetch_sms_list)
+        self.layout.addWidget(self.fetch_button)
+
+        self.export_button = QtWidgets.QPushButton('엑셀 추출하기')
+        self.export_button.clicked.connect(self.export_sms_list)
+        self.layout.addWidget(self.export_button)
+
+        self.sms_list_view = QtWidgets.QTextEdit()
+        self.sms_list_view.setReadOnly(True)
+        self.layout.addWidget(self.sms_list_view)
+
+        self.setLayout(self.layout)
+
+    def fetch_sms_list(self):
+        max_count = self.max_count_input.value()
+        sms_json = get_sms_list(max_count)
+        if sms_json:
+            formatted_sms_list = format_sms_list(sms_json)
+            self.sms_list_view.setPlainText(formatted_sms_list)
+            save_sms_list_to_file(sms_json, "sms_list.csv")
+        else:
+            self.sms_list_view.setPlainText("No result found.")
+
+    def export_sms_list(self):
+        max_count = self.max_count_input.value()
+        sms_json = get_sms_list(max_count)
+        if sms_json:
+            save_sms_list_to_file(sms_json, "sms_list.csv")
+        else:
+            self.sms_list_view.setPlainText("No result found.")
+
+def get_sms_list(max_count=1000):
     # adb 명령어를 사용하여 SMS 목록을 가져옴
     result = subprocess.run(['adb', 'shell', 'content', 'query', '--uri', 'content://sms/'], capture_output=True, text=True)
     if result.returncode != 0:
@@ -13,6 +65,8 @@ def get_sms_list():
     # 결과를 가공하여 JSON 형식으로 변환
     sms_list = []
     for line in result.stdout.splitlines():
+        if len(sms_list) >= max_count:
+            break
         sms = {}
         for item in line.split(','):
             if '=' in item:  # '=' 문자가 있는지 확인
@@ -29,7 +83,7 @@ def get_sms_list():
         print("No items found.")
         return None  # 또는 적절한 기본값 반환
 
-    return json.dumps(extract_sms_list(sms_list), ensure_ascii=False, indent=4)
+    return json.dumps(extract_sms_list(sms_list), ensure_ascii=False, indent=2)
 
 
 def extract_sms_list(sms_list):
@@ -42,6 +96,16 @@ def extract_sms_list(sms_list):
         }
         extracted_list.append(extracted_sms)
     return extracted_list
+
+def format_sms_list(sms_json):
+    sms_list = json.loads(sms_json)
+    formatted_list = ""
+    for sms in sms_list:
+        phone_number = sms['address'].replace('+82', '010')
+        date = datetime.fromtimestamp(int(sms['date']) / 1000).strftime('%Y-%m-%d %H:%M:%S')
+        body = sms['body']
+        formatted_list += f"전화번호: {phone_number} | 시간: {date} | 내용: {body}\n"
+    return formatted_list
 
 def save_sms_list_to_file(sms_list, filename):
     # JSON 문자열을 파이썬 객체로 변환
@@ -69,9 +133,8 @@ def save_sms_list_to_file(sms_list, filename):
             })
 
 if __name__ == "__main__":
-    sms_json = get_sms_list()
-    if sms_json:
-        save_sms_list_to_file(sms_json, "sms_list.csv")
-        # print(sms_json)
-    else:
-        print("No result found.")
+    
+    app = QtWidgets.QApplication(sys.argv)
+    sms_app = SMSApp()
+    sms_app.show()
+    sys.exit(app.exec_())
