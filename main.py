@@ -56,35 +56,48 @@ class SMSApp(QtWidgets.QWidget):
             self.sms_list_view.setPlainText("No result found.")
 
 def get_sms_list(max_count=1000):
-    # adb 명령어를 사용하여 SMS 목록을 가져옴
-    result = subprocess.run(['adb', 'shell', 'content', 'query', '--uri', 'content://sms/'], capture_output=True, text=True)
-    if result.returncode != 0:
-        print(f"Error fetching SMS list: {result.stderr}")
+    try:
+        # adb가 설치되어 있는지 확인
+        adb_check = subprocess.run(['adb', 'version'], capture_output=True, text=True)
+        if adb_check.returncode != 0:
+            raise RuntimeError("ADB가 설치되어 있지 않거나 PATH에 없습니다.")
+
+        # 연결된 디바이스가 있는지 확인
+        devices_check = subprocess.run(['adb', 'devices'], capture_output=True, text=True)
+        if devices_check.returncode != 0 or "device" not in devices_check.stdout.splitlines()[1:]:
+            raise RuntimeError("연결된 디바이스가 없습니다.")
+
+        # adb 명령어를 사용하여 SMS 목록을 가져옴
+        result = subprocess.run(['adb', 'shell', 'content', 'query', '--uri', 'content://sms/'], capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"SMS 목록을 가져오는 중 오류 발생: {result.stderr}")
+
+        # 결과를 가공하여 JSON 형식으로 변환
+        sms_list = []
+        for line in result.stdout.splitlines():
+            if len(sms_list) >= max_count:
+                break
+            sms = {}
+            for item in line.split(','):
+                if '=' in item:  # '=' 문자가 있는지 확인
+                    key, value = item.split('=', 1)  # 수정: '='로 나누는 부분에서 최대 2개의 값만 분리
+                    sms[key.strip()] = value.strip()
+                else:
+                    # '=' 문자가 없는 경우 처리
+                    print(f"잘못된 항목: {item}")
+
+            if sms.get('type') == '1':  # 'type'이 1인 경우는 받은 메시지
+                sms_list.append(sms)
+
+        if not sms_list or sms_list == [{}]:  # 리스트가 비어 있거나 [{}]인 경우 확인
+            print("항목이 없습니다.")
+            return None  # 또는 적절한 기본값 반환
+
+        return json.dumps(extract_sms_list(sms_list), ensure_ascii=False, indent=2)
+
+    except Exception as e:
+        QtWidgets.QMessageBox.critical(None, "오류", f"adb 실행 실패: {str(e)}")
         return None
-
-    # 결과를 가공하여 JSON 형식으로 변환
-    sms_list = []
-    for line in result.stdout.splitlines():
-        if len(sms_list) >= max_count:
-            break
-        sms = {}
-        for item in line.split(','):
-            if '=' in item:  # '=' 문자가 있는지 확인
-                key, value = item.split('=')
-                sms[key.strip()] = value.strip()
-            else:
-                # '=' 문자가 없는 경우 처리
-                print(f"Invalid item: {item}")
-								
-        if sms.get('type') == '1':  # 'type'이 1인 경우는 받은 메시지
-            sms_list.append(sms)
-
-    if not sms_list or sms_list == [{}]:  # 리스트가 비어 있거나 [{}]인 경우 확인
-        print("No items found.")
-        return None  # 또는 적절한 기본값 반환
-
-    return json.dumps(extract_sms_list(sms_list), ensure_ascii=False, indent=2)
-
 
 def extract_sms_list(sms_list):
     extracted_list = []
@@ -101,7 +114,12 @@ def format_sms_list(sms_json):
     sms_list = json.loads(sms_json)
     formatted_list = ""
     for sms in sms_list:
-        phone_number = sms['address'].replace('+82', '010')
+        phone_number = sms.get('address')
+        if phone_number:
+            phone_number = phone_number.replace('+82', '010')
+        else:
+            phone_number = "Unknown"  # 주소가 없는 경우 기본값 설정
+
         date = datetime.fromtimestamp(int(sms['date']) / 1000).strftime('%Y-%m-%d %H:%M:%S')
         body = sms['body']
         formatted_list += f"전화번호: {phone_number} | 시간: {date} | 내용: {body}\n"
@@ -124,8 +142,13 @@ def save_sms_list_to_file(sms_list, filename):
         writer = csv.DictWriter(file, fieldnames=['전화번호', '시간', '내용'])
         writer.writeheader()
         for sms in sms_list:
-            # 전화번호에서 +82를 010으로 대체
-            phone_number = sms['address'].replace('+82', '010')
+            # 전화번호가 None인 경우 처리 추가
+            phone_number = sms.get('address')
+            if phone_number:
+                phone_number = phone_number.replace('+82', '010')
+            else:
+                phone_number = "Unknown"  # 기본값 설정
+
             writer.writerow({
                 '전화번호': phone_number,
                 '시간': sms['date'],
